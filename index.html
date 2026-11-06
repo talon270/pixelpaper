@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pixelpaper: a 1-bit wallpaper for Quickshell</title>
+<meta name="description" content="A Quickshell wallpaper for Hyprland that draws 1-bit desktop scenes from your live system, drifts them slowly, and stops when your CPU is under pressure.">
+<meta name="color-scheme" content="light dark">
+<style>
+/* Tokens. Light is the cream-neobrutalist family (designs.md); dark keeps the same
+   skeleton with a light hairline. Windows copy the engine's own window chrome. */
+:root {
+  --paper: #f3efe6; --panel: #fff; --ink: #111; --dim: #555; --line: #111; --shadow: #111;
+  --spring-routine: linear(0, 0.011, 0.039, 0.08, 0.129, 0.183, 0.239, 0.296, 0.352, 0.407, 0.459, 0.509, 0.555, 0.599, 0.639, 0.675, 0.709, 0.74, 0.768, 0.793, 0.816, 0.836, 0.855, 0.871, 0.886, 0.899, 0.911, 0.921, 0.931, 0.939, 0.946, 0.953, 0.958, 0.963, 0.968, 0.972, 0.975, 0.978, 0.981, 0.983, 0.985, 0.987, 0.989, 0.99, 0.992, 0.993, 0.994, 0.994, 1);
+  --spring-routine-ms: 215ms;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+:root[data-theme="dark"] { --paper: #141414; --panel: #1d1d1d; --ink: #ececec; --dim: #a8a8a8; --line: #ececec; --shadow: #3a3a3a; }
+
+* { box-sizing: border-box; }
+html { background: var(--paper); color: var(--ink); font-family: var(--sans); line-height: 1.55; }
+body { margin: 0; }
+a { color: inherit; text-underline-offset: 3px; }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+code, pre { font-family: var(--mono); font-size: .86rem; }
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+/* ---- window chrome: striped title bar, close box, hard one-step shadow ---- */
+.win { background: var(--panel); border: 2px solid var(--line); box-shadow: 6px 6px 0 var(--shadow); }
+.bar {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  height: 26px; padding: 6px 4px; border-bottom: 2px solid var(--line);
+  background: repeating-linear-gradient(var(--line) 0 2px, transparent 2px 4px) content-box;
+}
+.bar h2, .bar span.t { margin: 0; padding: 0 10px; background: var(--panel); font-size: .9rem; line-height: 14px; font-weight: 700; }
+.close { position: absolute; left: 12px; top: 50%; translate: 0 -50%; width: 14px; height: 14px;
+         background: var(--panel); border: 2px solid var(--line); box-shadow: 0 0 0 3px var(--panel); }
+.body { padding: 20px 22px 22px; }
+.body > :first-child { margin-top: 0; }
+.body > :last-child { margin-bottom: 0; }
+
+/* ---- hero: the live wallpaper behind one window ---- */
+.hero { position: relative; min-height: 100svh; display: grid; place-items: center; padding: 24px 16px; overflow: hidden; }
+#wall { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hero .win { position: relative; width: min(600px, 100%); }
+h1 { margin: 0 0 12px; font-size: 2.2rem; line-height: 1; }
+h1 canvas { display: block; max-width: 100%; }
+.lede { font-size: 1.05rem; margin: 0 0 18px; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.controls { margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--line); display: grid; gap: 12px; }
+.label { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); min-width: 92px; }
+.note { margin: 14px 0 0; font-size: .85rem; color: var(--dim); }
+
+/* ---- buttons: press sinks into the shadow ---- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 16px; font: 600 .95rem var(--sans); text-decoration: none; cursor: pointer;
+  color: var(--ink); background: var(--panel); border: 2px solid var(--line); border-radius: 8px;
+  box-shadow: 3px 3px 0 var(--shadow);
+  transition: translate var(--spring-routine-ms) var(--spring-routine), box-shadow var(--spring-routine-ms) var(--spring-routine);
+}
+.btn:active { translate: 3px 3px; box-shadow: 0 0 0 var(--shadow); }
+.btn.primary { background: var(--ink); color: var(--panel); }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; box-shadow: none; min-width: 72px; }
+.seg .btn + .btn { border-left: 0; }
+.seg .btn:first-child { border-radius: 8px 0 0 8px; }
+.seg .btn:last-child { border-radius: 0 8px 8px 0; }
+@supports (corner-shape: squircle) {
+  .btn { corner-shape: squircle; border-radius: 12px; }
+  .seg .btn:first-child { border-radius: 12px 0 0 12px; }
+  .seg .btn:last-child { border-radius: 0 12px 12px 0; }
+}
+
+/* Swatches are drawn at 26px; ::after widens the target to 44px. */
+.swatches { display: flex; flex-wrap: wrap; gap: 18px; padding: 9px; margin: -9px; }
+.sw { position: relative; width: 26px; height: 26px; padding: 0; border: 2px solid var(--line); border-radius: 50%; cursor: pointer; background: var(--c); }
+.sw::after { content: ""; position: absolute; inset: -9px; }
+.sw[aria-pressed="true"] { outline: 3px solid var(--ink); outline-offset: 3px; }
+.sw.spectrum { background: conic-gradient(hsl(0 55% 45%), hsl(60 55% 45%), hsl(120 55% 45%), hsl(180 55% 45%), hsl(240 55% 45%), hsl(300 55% 45%), hsl(360 55% 45%)); }
+.sw.random { background: repeating-conic-gradient(var(--ink) 0 25%, var(--panel) 0 50%) 0 0 / 6px 6px; }
+
+/* ---- content ---- */
+main { max-width: 940px; margin: 0 auto; padding: 72px 20px 40px; display: grid; gap: 44px; }
+main > * { min-width: 0; }   /* grid items default to min-width: auto; long code lines would widen the page */
+main h3 { margin: 0 0 6px; font-size: 1rem; }
+.claims { display: grid; gap: 22px 32px; }
+@media (min-width: 760px) { .claims { grid-template-columns: 1fr 1fr; } }
+.claims p { margin: 0; }
+pre { position: relative; margin: 10px 0 18px; padding: 14px 16px; padding-right: 92px; overflow-x: auto;
+      background: var(--paper); border: 2px solid var(--line); }
+pre .btn { position: absolute; top: 6px; right: 6px; min-height: 36px; padding: 0 12px; font-size: .8rem; box-shadow: none; }
+pre .btn::after { content: ""; position: absolute; inset: -4px; }
+ol.steps { padding-left: 1.3em; margin: 0; }
+ol.steps > li { margin-bottom: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+th { text-align: left; padding: 0 12px 8px 0; border-bottom: 2px solid var(--line); }
+td { padding: 8px 12px 0 0; vertical-align: top; }
+td code { white-space: nowrap; }
+.scroll { overflow-x: auto; }
+footer { max-width: 940px; margin: 0 auto; padding: 0 20px 48px; color: var(--dim); font-size: .85rem; }
+
+@media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <canvas id="wall" aria-hidden="true"></canvas>
+  <div class="win">
+    <div class="bar"><span class="close" aria-hidden="true"></span><span class="t">pixelpaper</span></div>
+    <div class="body">
+      <h1 id="title" aria-label="pixelpaper">pixelpaper</h1>
+      <p class="lede">A wallpaper for Quickshell on Hyprland. It draws 1-bit desktop scenes (lists, keypads, dialogs) from your live system, drifts them slowly, and stops when other programs need the CPU.</p>
+      <div class="row">
+        <a class="btn primary" href="https://github.com/talon270/pixelpaper/releases/latest/download/pixelpaper.tar.gz">Download .tar.gz</a>
+        <a class="btn" href="https://github.com/talon270/pixelpaper">Source on GitHub</a>
+      </div>
+      <div class="controls">
+        <div class="row"><span class="label" id="colour-l">Colour</span><div class="swatches" id="swatches" role="group" aria-labelledby="colour-l"></div></div>
+        <div class="row"><span class="label" id="look-l">Appearance</span>
+          <div class="seg" role="group" aria-labelledby="look-l">
+            <button class="btn" type="button" data-look="dark" aria-pressed="false">Dark</button><button class="btn" type="button" data-look="light" aria-pressed="false">Light</button>
+          </div>
+          <button class="btn" type="button" id="next">Next scene</button>
+        </div>
+      </div>
+      <p class="note" id="note">This page runs the real scene generator from the repo. The text is sample data, and scenes change every 20 s here. On a desktop they change about every 4 minutes.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="win" aria-labelledby="install-h">
+    <div class="bar"><span class="close" aria-hidden="true"></span><h2 id="install-h">Install</h2></div>
+    <div class="body">
+      <p><strong>You need Quickshell, Hyprland and a kernel with PSI</strong> (Linux 4.20 or later; check that <code>/proc/pressure/cpu</code> exists). Tested with Quickshell 0.3.1 on CachyOS. Other compositors are untested.</p>
+      <ol class="steps">
+        <li>Unpack the engine into your Quickshell config folder and start it:
+<pre><code>mkdir -p ~/.config/quickshell
+curl -L https://github.com/talon270/pixelpaper/releases/latest/download/pixelpaper.tar.gz \
+  | tar -xz -C ~/.config/quickshell
+qs -c pixelpaper -d</code></pre></li>
+        <li>Stop your old wallpaper daemon (hyprpaper, swww, swaybg). It draws on the same background layer.</li>
+        <li>Start pixelpaper with Hyprland. Add this to <code>hyprland.conf</code>:
+<pre><code>exec-once = qs -c pixelpaper -d</code></pre></li>
+        <li>Optional keys for the next scene and the next colour:
+<pre><code>bind = SUPER ALT, S, exec, qs -c pixelpaper ipc call scene next
+bind = SUPER ALT, W, exec, qs -c pixelpaper ipc call palette next</code></pre></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="win" aria-labelledby="cmd-h">
+    <div class="bar"><span class="close" aria-hidden="true"></span><h2 id="cmd-h">Commands</h2></div>
+    <div class="body scroll">
+      <p>Every command is <code>qs -c pixelpaper ipc call &lt;target&gt; &lt;function&gt; [argument]</code>. Palette and appearance survive a restart.</p>
+      <table>
+        <thead><tr><th>Target</th><th>Function</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>scene</code></td><td><code>next</code></td><td>Build a new scene now, with fresh live text</td></tr>
+          <tr><td><code>scene</code></td><td><code>kind &lt;name&gt;</code></td><td>Build one kind: <code>list specimen icons keypad controls field dialog</code></td></tr>
+          <tr><td><code>scene</code></td><td><code>snap &lt;path.png&gt;</code></td><td>Save the first screen's wallpaper as a PNG</td></tr>
+          <tr><td><code>palette</code></td><td><code>next</code>, <code>prev</code></td><td>Step through 9 colours, then <code>spectrum</code> (hue turns once an hour) and <code>random</code> (new colour each scene)</td></tr>
+          <tr><td><code>palette</code></td><td><code>set &lt;name|#rrggbb&gt;</code></td><td>Pick a palette by name, or any hex colour</td></tr>
+          <tr><td><code>palette</code></td><td><code>list</code>, <code>get</code></td><td>Print the names, or the current one</td></tr>
+          <tr><td><code>appearance</code></td><td><code>set &lt;dark|light|auto&gt;</code></td><td><code>auto</code> follows the caelestia shell's scheme file if you use it</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="win" aria-labelledby="why-h">
+    <div class="bar"><span class="close" aria-hidden="true"></span><h2 id="why-h">Why it stays cheap</h2></div>
+    <div class="body claims">
+      <div><h3>It stops when other programs wait for the CPU.</h3>
+        <p>It reads <code>/proc/pressure/cpu</code>: the share of the last 10 s in which a ready task waited for a core. Above 25% the drift springs to a stop; below 10% it starts again. An idle machine reads about 3%. A job that fills one core while others sit free makes nothing wait, so the wallpaper keeps moving. In testing, a full load stopped it within about 5 s.</p></div>
+      <div><h3>Each scene is painted once, then moved.</h3>
+        <p>A new scene costs about 0.8 s of CPU to paint, once every ~4 minutes. Drift moves the painted canvas as one item, so a frame is a transform, not a repaint. On one screen at 20 fps, CPU use fell from 10.2% to 3.1% of one core, and to 0.2% while paused.</p></div>
+      <div><h3>It stops when no one can see it.</h3>
+        <p>A fullscreen window on that monitor, or 5 minutes without input, pauses the drift and the scene timer. Video players that inhibit idle keep it drifting under a windowed video. These two pauses are wired up but not yet measured.</p></div>
+      <div><h3>It wanders instead of scrolling.</h3>
+        <p>The camera follows two slow sines per axis, so it curves through every direction and stays within 12% of the screen height of the centre. Speed is a critically damped spring: a stop eases out over about 2 s.</p></div>
+      <div><h3>Colour changes never repaint.</h3>
+        <p>Ink is black at 20% opacity (17% in light mode) over the base colour, so palette, spectrum and light/dark changes only move the base.</p></div>
+      <div><h3>The text is from your machine.</h3>
+        <p>Scenes print your hostname, the playing song (MPRIS), uptime, memory use, battery and workspace names. Values are read when a scene is built and stay until the next one.</p></div>
+    </div>
+  </section>
+
+  <section class="win" aria-labelledby="limits-h">
+    <div class="bar"><span class="close" aria-hidden="true"></span><h2 id="limits-h">What is measured, what is not</h2></div>
+    <div class="body scroll">
+      <table>
+        <thead><tr><th>Measured</th><th>Not measured yet</th></tr></thead>
+        <tbody>
+          <tr><td>3.1% of one core drifting, 0.2% paused (one screen, 20 fps)</td><td>Fullscreen and idle pauses</td></tr>
+          <tr><td>Pressure pause trips within ~5 s of full load</td><td>Several monitors (each gets its own scene; tested on one)</td></tr>
+          <tr><td>Scene generator self-check: 7 kinds, 2 sizes, 20 seeds each</td><td>Compositors other than Hyprland</td></tr>
+        </tbody>
+      </table>
+      <p class="note">Quickshell warns if it was built against an older Qt than the one installed. Rebuild Quickshell if it does; a mismatch can crash it.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>MIT licence. Inspired by the "Macintosh" wallpaper in macOS Tahoe. Contains no Apple artwork, fonts or text, and is not affiliated with Apple.</p>
+</footer>
+
+<script>
+/* ============================================================================
+   PIXELPAPER · PAGE DEMO
+   · loads the engine's own scenes.js + icons.js (QML dot-directives stripped)
+   · paints each scene once into an offscreen canvas, then pans it (SceneLayer.qml)
+   · wander = two sines per axis; speed, fades and colour are springs
+   · stops drawing when the hero is off screen or the tab is hidden
+   Namespace: window.Pixelpaper
+   ========================================================================== */
+(function () {
+  "use strict";
+
+  // Scene.qml's knobs, except sceneSeconds: 240 s is too slow for a page visit.
+  const KNOBS = { inkDark: .2, inkLight: .17, shadow: .55, sceneSeconds: 20, zoomMin: 8, zoomMax: 15,
+                  panRadius: .12, panSpeed: .04, speedStiffness: 2 };
+  const PALETTES = [
+    { name: "red", h: 0.000, s: 0.58, l: 0.40 }, { name: "orange", h: 0.065, s: 0.75, l: 0.47 },
+    { name: "yellow", h: 0.125, s: 0.80, l: 0.52 }, { name: "green", h: 0.360, s: 0.40, l: 0.36 },
+    { name: "teal", h: 0.480, s: 0.50, l: 0.36 }, { name: "blue", h: 0.600, s: 0.55, l: 0.42 },
+    { name: "purple", h: 0.760, s: 0.40, l: 0.42 }, { name: "pink", h: 0.920, s: 0.55, l: 0.50 },
+    { name: "graphite", h: 0.600, s: 0.06, l: 0.32 }
+  ];
+  const MODES = [{ name: "spectrum" }, { name: "random" }];
+  const SUBSTEP = 1 / 240;   // animations.html: fixed step keeps the springs stable at any frame rate
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)");
+  const prefersDark = matchMedia("(prefers-color-scheme: dark)");
+
+  // Sample words: a visitor's /proc is not readable from a page, and the note says so.
+  function sampleWords() {
+    const d = new Date();
+    return { host: "workstation", user: "you", song: "Gymnopedie No. 1", artist: "Erik Satie",
+             kernel: "6.12.0", uptime: "2h 41m", mem: .42, battery: -1, workspaces: ["Workspace 1", "web", "notes"],
+             date: d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }).replace(",", "") };
+  }
+
+  // animations.html springStep, with a per-spring rest threshold (opacity and colour are 0..1, not px).
+  function spring(position, target, stiffness, damping, rest) {
+    return { position, target, velocity: 0, stiffness, damping, rest };
+  }
+  function springStep(s, dt) {
+    const c = 2 * s.damping * Math.sqrt(s.stiffness);
+    for (let left = dt; left > 1e-9; left -= SUBSTEP) {
+      const h = Math.min(SUBSTEP, left);
+      s.velocity += (-s.stiffness * (s.position - s.target) - c * s.velocity) * h;
+      s.position += s.velocity * h;
+    }
+    if (Math.abs(s.velocity) > s.rest || Math.abs(s.position - s.target) > s.rest) return false;
+    s.position = s.target; s.velocity = 0;
+    return true;
+  }
+
+  async function loadEngine() {
+    const strip = (t) => t.replace(/^\.(pragma|import).*$/gm, "");
+    const [icons, scenes] = await Promise.all(["pixelpaper/icons.js", "pixelpaper/scenes.js"].map((u) =>
+      fetch(u).then((r) => { if (!r.ok) throw new Error(u + ": HTTP " + r.status); return r.text(); })));
+    const Icons = new Function(strip(icons) + "; return { pixels, KEYS, FIRST_LIVE };")();
+    return new Function("Icons", strip(scenes) + "; return { build, KINDS, text, textWidth };")(Icons);
+  }
+
+  // Port of SceneLayer.qml onPaint: black cells with a gap, two soft shadow passes under the ink.
+  function paintBits(ctx, b, p) {
+    const gap = Math.max(1, Math.round(p * 0.12)), s = p - gap;
+    const passes = [[0.22, 0.32, KNOBS.shadow * 0.45], [0.11, 0.16, KNOBS.shadow * 0.55], [0, 0, 1]];
+    for (const [dx, dy, a] of passes) {
+      ctx.fillStyle = "rgba(0,0,0," + a + ")";
+      ctx.beginPath();
+      for (let y = 0; y < b.h; y++) {
+        const row = y * b.w;
+        for (let x = 0; x < b.w; x++) if (b.bits[row + x]) ctx.rect((x + dx) * p, (y + dy) * p, s, s);
+      }
+      ctx.fill();
+    }
+  }
+
+  function hsl2rgb(h, s, l) {
+    const f = (n) => { const k = (n + h * 12) % 12, a = s * Math.min(l, 1 - l);
+                       return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+    return [f(0), f(8), f(4)];
+  }
+
+  const wall = document.getElementById("wall"), ctx = wall.getContext("2d");
+  const hero = document.querySelector(".hero"), note = document.getElementById("note");
+  let Engine = null, W = 0, H = 0, dpr = 1, raf = 0, last = 0, lastKind = "", onScreen = true;
+  let palette = PALETTES[5], randomPick = PALETTES[0], light = false, userLook = null;
+  const layers = [];   // { img, w, h, spin, tilt, alpha }
+  const drift = { t: Math.random() * 1000, speed: spring(0, 1, KNOBS.speedStiffness, 1, .002) };
+  const rgb = [0, 1, 2].map(() => spring(0, 0, 9, 1, .001));
+  let first = true;
+
+  function colourTarget() {
+    const c = palette.name === "spectrum" ? { h: (Date.now() / 3600000) % 1, s: .55, l: .42 }
+            : palette.name === "random" ? randomPick : palette;
+    // Time of day dims the dark base, brightest at noon (Scene.qml).
+    const hours = new Date().getHours() + new Date().getMinutes() / 60;
+    const dim = .675 + .325 * Math.max(0, Math.sin(Math.PI * (hours - 6) / 12));
+    const L = light ? Math.min(.88, .62 + .4 * c.l) : c.l * dim;
+    const t = hsl2rgb(c.h, light ? c.s * .8 : c.s, L);
+    rgb.forEach((s, i) => { s.target = t[i]; if (first) s.position = t[i]; });
+    first = false;
+    wake();
+  }
+
+  function next(kind) {
+    if (!Engine || !W) return;
+    const kinds = Engine.KINDS.filter((k) => k !== lastKind);
+    if (!kind || Engine.KINDS.indexOf(kind) < 0) kind = kinds[Math.floor(Math.random() * kinds.length)];
+    lastKind = kind;
+    const px = Math.max(4, Math.round(H / 1080 * (KNOBS.zoomMin + Math.random() * (KNOBS.zoomMax - KNOBS.zoomMin))));
+    const spin = (Math.random() < .5 ? -1 : 1) * (8 + Math.random() * 17), tilt = 30 + Math.random() * 15;
+    // Plane area that covers the view at this angle, plus room to wander (Scene.qml).
+    const t = spin * Math.PI / 180, c = Math.cos(tilt * Math.PI / 180);
+    const pad = 2 * KNOBS.panRadius * H + 4 * px;
+    const w = W * Math.abs(Math.cos(t)) + H / c * Math.abs(Math.sin(t)) + pad;
+    const h = W * Math.abs(Math.sin(t)) + H / c * Math.abs(Math.cos(t)) + pad;
+    const b = Engine.build(kind, Math.ceil(w / px), Math.ceil(h / px), Math.floor(Math.random() * 0x7fffffff), sampleWords());
+
+    const img = document.createElement("canvas");
+    img.width = Math.ceil(b.w * px * dpr); img.height = Math.ceil(b.h * px * dpr);
+    const ic = img.getContext("2d");
+    ic.scale(dpr, dpr);
+    paintBits(ic, b, px);
+
+    while (layers.length > 1) layers.shift();          // at most one scene fading out
+    layers.forEach((l) => { l.alpha.target = 0; });
+    layers.push({ img, w: b.w * px, h: b.h * px, spin, tilt, alpha: spring(0, 1, 2.5, 1, .002) });
+    if (palette.name === "random") {
+      const others = PALETTES.filter((p) => p !== randomPick);
+      randomPick = others[Math.floor(Math.random() * others.length)];
+      colourTarget();
+    }
+    wake();
+  }
+
+  function draw() {
+    const [r, g, bl] = rgb.map((s) => s.position);
+    const css = (k) => "rgb(" + [r, g, bl].map((v) => Math.round(Math.min(1, Math.max(0, v * k)) * 255)).join(",") + ")";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, css(1.12)); grad.addColorStop(1, css(1 / 1.18));
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    const R = KNOBS.panRadius * H, t = drift.t;
+    const ox = R * (0.6 * Math.sin(t) + 0.4 * Math.sin(t * 2.31 + 1.7));
+    const oy = R * (0.6 * Math.sin(t * 0.83 + 0.4) + 0.4 * Math.sin(t * 1.93 + 2.9));
+    const ink = light ? KNOBS.inkLight : KNOBS.inkDark;
+    for (const l of layers) {
+      ctx.save();
+      ctx.globalAlpha = l.alpha.position * ink;
+      ctx.translate(W / 2, H / 2);                       // QML order: Translate, Rotation, Scale
+      ctx.scale(1, Math.cos(l.tilt * Math.PI / 180));
+      ctx.rotate(l.spin * Math.PI / 180);
+      ctx.translate(ox, oy);
+      ctx.drawImage(l.img, -l.w / 2, -l.h / 2, l.w, l.h);
+      ctx.restore();
+    }
+  }
+
+  function frame(now) {
+    raf = 0;
+    const dt = Math.min((now - last) / 1000, .25);
+    last = now;
+    drift.speed.target = onScreen && !reduce.matches ? 1 : 0;
+    let moving = !springStep(drift.speed, dt);
+    rgb.forEach((s) => { if (!springStep(s, dt)) moving = true; });
+    for (let i = layers.length - 1; i >= 0; i--) {
+      if (!springStep(layers[i].alpha, dt)) moving = true;
+      else if (layers[i].alpha.target === 0) layers.splice(i, 1);
+    }
+    drift.t += KNOBS.panSpeed * drift.speed.position * dt;
+    draw();
+    if (moving || drift.speed.position > 0) raf = requestAnimationFrame(frame);
+  }
+  function wake() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); } }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const box = hero.getBoundingClientRect();
+    const grew = box.width > W + 1 || box.height > H + 1;
+    W = box.width; H = box.height;
+    wall.width = Math.round(W * dpr); wall.height = Math.round(H * dpr);
+    if (grew && Engine) next(lastKind);   // a bigger view needs a bigger plane
+    wake();
+  }
+
+  // ---- title in the engine's own 5x7 font ----
+  function drawTitle() {
+    const h1 = document.getElementById("title");
+    const word = "pixelpaper", cells = Engine.textWidth(word, 1, true);
+    const b = { w: cells + 1, h: 8, bits: new Uint8Array((cells + 1) * 8) };
+    Engine.text(b, 0, 0, word, 1, true);
+    const p = 5, c = document.createElement("canvas");
+    c.width = b.w * p * dpr; c.height = b.h * p * dpr;
+    c.style.width = b.w * p + "px"; c.style.height = b.h * p + "px";
+    c.setAttribute("aria-hidden", "true");
+    const x = c.getContext("2d");
+    x.scale(dpr, dpr);
+    const gap = 1, s = p - gap;
+    x.fillStyle = getComputedStyle(h1).color;
+    for (let y = 0; y < b.h; y++) for (let i = 0; i < b.w; i++) if (b.bits[y * b.w + i]) x.fillRect(i * p, y * p, s, s);
+    h1.replaceChildren(c);
+  }
+
+  // ---- controls ----
+  const swatches = document.getElementById("swatches");
+  for (const p of PALETTES.concat(MODES)) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "sw " + p.name;
+    btn.setAttribute("aria-label", p.name); btn.title = p.name;
+    if (p.h !== undefined) btn.style.setProperty("--c", "hsl(" + p.h * 360 + " " + p.s * 100 + "% " + p.l * 100 + "%)");
+    btn.addEventListener("click", () => { palette = p; syncControls(); colourTarget(); });
+    swatches.append(btn);
+  }
+  function syncControls() {
+    for (const b of swatches.children) b.setAttribute("aria-pressed", String(b.title === palette.name));
+    for (const b of document.querySelectorAll("[data-look]"))
+      b.setAttribute("aria-pressed", String((b.dataset.look === "light") === light));
+  }
+  function setLook(isLight) {
+    light = isLight;
+    document.documentElement.dataset.theme = light ? "light" : "dark";
+    syncControls(); colourTarget();
+    if (Engine) drawTitle();
+  }
+  for (const b of document.querySelectorAll("[data-look]"))
+    b.addEventListener("click", () => { userLook = b.dataset.look; setLook(userLook === "light"); });
+  prefersDark.addEventListener("change", () => { if (!userLook) setLook(!prefersDark.matches); });
+  document.getElementById("next").addEventListener("click", () => next());
+
+  for (const pre of document.querySelectorAll("pre")) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "btn"; btn.textContent = "Copy";
+    btn.addEventListener("click", () => {
+      navigator.clipboard.writeText(pre.querySelector("code").textContent).then(
+        () => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy"; }, 1500); },
+        () => { btn.textContent = "Select to copy"; });
+    });
+    pre.append(btn);
+  }
+
+  // Like the desktop engine: no drift and no new scenes while no one can see the wallpaper.
+  new IntersectionObserver((e) => { onScreen = e[0].isIntersecting; wake(); }).observe(hero);
+  new ResizeObserver(resize).observe(hero);
+  reduce.addEventListener("change", wake);
+  setInterval(() => { if (palette.name === "spectrum") colourTarget(); }, 5000);
+  setInterval(() => { if (onScreen && !document.hidden) next(); }, KNOBS.sceneSeconds * 1000);
+
+  setLook(!prefersDark.matches);
+  loadEngine().then((e) => {
+    Engine = e;
+    drawTitle();
+    next();
+  }, (err) => {
+    note.textContent = "The live demo could not load the engine (" + err.message + "). Pages opened from file:// cannot fetch it; serve the folder over http instead.";
+  });
+
+  window.Pixelpaper = { next, layers, KNOBS };
+})();
+</script>
+</body>
+</html>
