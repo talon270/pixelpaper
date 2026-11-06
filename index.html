@@ -42,14 +42,25 @@ code, pre { font-family: var(--mono); font-size: .86rem; }
 .body > :last-child { margin-bottom: 0; }
 
 /* ---- hero: the live wallpaper behind one window ---- */
-.hero { position: relative; min-height: 100svh; display: grid; place-items: center; padding: 24px 16px; overflow: hidden; }
+/* The window sits in the bottom-left corner like a desktop window, so most of the
+   wallpaper stays clear; the close box folds it down to its title bar. */
+.hero { position: relative; min-height: 100svh; display: grid; place-items: end start; padding: 28px; overflow: hidden; }
+@media (max-width: 520px) { .hero { padding: 12px; } }
 #wall { position: absolute; inset: 0; width: 100%; height: 100%; }
-.hero .win { position: relative; width: min(600px, 100%); }
-h1 { margin: 0 0 12px; font-size: 2.2rem; line-height: 1; }
+.hero .win { position: relative; width: min(440px, 100%); }
+.hero .body { padding: 16px 18px 18px; }
+.fold { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--spring-routine-ms) var(--spring-routine); }
+.fold > div { overflow: hidden; min-height: 0; }
+.win.folded .fold { grid-template-rows: 0fr; }
+.win.folded > .bar { border-bottom-color: transparent; }
+button.close { padding: 0; cursor: pointer; }
+button.close::after { content: ""; position: absolute; inset: -15px; }
+.win.folded button.close { background: var(--line); }
+h1 { margin: 0 0 10px; font-size: 1.8rem; line-height: 1; }
 h1 canvas { display: block; max-width: 100%; }
-.lede { font-size: 1.05rem; margin: 0 0 18px; }
+.lede { font-size: .95rem; margin: 0 0 14px; }
 .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.controls { margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--line); display: grid; gap: 12px; }
+.controls { margin-top: 16px; padding-top: 14px; border-top: 2px solid var(--line); display: grid; gap: 12px; }
 .label { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); min-width: 92px; }
 .note { margin: 14px 0 0; font-size: .85rem; color: var(--dim); }
 
@@ -76,7 +87,7 @@ h1 canvas { display: block; max-width: 100%; }
 }
 
 /* Swatches are drawn at 26px; ::after widens the target to 44px. */
-.swatches { display: flex; flex-wrap: wrap; gap: 18px; padding: 9px; margin: -9px; }
+.swatches { display: grid; grid-template-columns: repeat(6, 26px); gap: 18px;   /* 6 + 5, no orphan on the second row */ padding: 9px; margin: -9px; }
 .sw { position: relative; width: 26px; height: 26px; padding: 0; border: 2px solid var(--line); border-radius: 50%; cursor: pointer; background: var(--c); }
 .sw::after { content: ""; position: absolute; inset: -9px; }
 .sw[aria-pressed="true"] { outline: 3px solid var(--ink); outline-offset: 3px; }
@@ -103,16 +114,16 @@ td code { white-space: nowrap; }
 .scroll { overflow-x: auto; }
 footer { max-width: 940px; margin: 0 auto; padding: 0 20px 48px; color: var(--dim); font-size: .85rem; }
 
-@media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .btn, .fold { transition: none; } }
 </style>
 </head>
 <body>
 
 <header class="hero">
   <canvas id="wall" aria-hidden="true"></canvas>
-  <div class="win">
-    <div class="bar"><span class="close" aria-hidden="true"></span><span class="t">pixelpaper</span></div>
-    <div class="body">
+  <div class="win" id="panel">
+    <div class="bar"><button class="close" type="button" id="fold" aria-expanded="true" aria-controls="panel-body" aria-label="Hide panel" title="Hide panel"></button><span class="t">pixelpaper</span></div>
+    <div class="fold" id="panel-body"><div><div class="body">
       <h1 id="title" aria-label="pixelpaper">pixelpaper</h1>
       <p class="lede">A wallpaper for Quickshell on Hyprland. It draws 1-bit desktop scenes (lists, keypads, dialogs) from your live system, drifts them slowly, and stops when other programs need the CPU.</p>
       <div class="row">
@@ -129,7 +140,7 @@ footer { max-width: 940px; margin: 0 auto; padding: 0 20px 48px; color: var(--di
         </div>
       </div>
       <p class="note" id="note">This page runs the real scene generator from the repo. The text is sample data, and scenes change every 20 s here. On a desktop they change about every 4 minutes.</p>
-    </div>
+    </div></div></div>
   </div>
 </header>
 
@@ -439,6 +450,14 @@ bind = SUPER ALT, W, exec, qs -c pixelpaper ipc call palette next</code></pre></
     b.addEventListener("click", () => { userLook = b.dataset.look; setLook(userLook === "light"); });
   prefersDark.addEventListener("change", () => { if (!userLook) setLook(!prefersDark.matches); });
   document.getElementById("next").addEventListener("click", () => next());
+  const panel = document.getElementById("panel"), fold = document.getElementById("fold");
+  fold.addEventListener("click", () => {
+    const open = panel.classList.toggle("folded") === false;
+    fold.setAttribute("aria-expanded", String(open));
+    fold.title = open ? "Hide panel" : "Show panel";
+    fold.setAttribute("aria-label", fold.title);
+    document.getElementById("panel-body").inert = !open;   // folded controls leave the tab order
+  });
 
   for (const pre of document.querySelectorAll("pre")) {
     const btn = document.createElement("button");
